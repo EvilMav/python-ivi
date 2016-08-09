@@ -33,19 +33,37 @@ from .. import ivi
 from .. import fgen
 
 StandardWaveformMapping = {
-    'sine': 'sin',
-    'square': 'squ',
-    'triangle': 'tri',
-    'ramp_up': 'ramp',
-    # 'ramp_down',
-    # 'dc'
+    'sine': 'SINE',
+    'square': 'SQUARE',
+    'triangle': 'RAMP',
+    'dc': 'DC'
+    # Missing: ramp up, ramp down
 }
 
-# TODO: more groups? Especially FgenModulateX
+
+# TODO: more groups? ModulateAM, ModulateFM
 class siglentSDG2000X(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
-                       fgen.ArbSeq, fgen.SoftwareTrigger, fgen.Burst,
-                       fgen.ArbChannelWfm):
+                      fgen.SoftwareTrigger, fgen.Burst,
+                      fgen.ArbChannelWfm):
     """ Siglent SDG2042X function/arbitrary waveform generator driver """
+
+    @staticmethod
+    def _parse_response_to_dict(resp):
+        header, data = tuple(resp.split(' ', 2))
+
+        channel_str, command = tuple(header.split(':'))
+        channel_id = 2 if channel_str == 'C2' else 1
+        result = dict(_chan=channel_id, _cmd=command)
+
+        parts = data.split(',')
+        if len(parts) % 2 > 0:  # in case of uneven length, treat the first entry as a direct response to command
+            parts.insert(0, command)
+
+        pairs = zip(parts[::2], parts[1::2])
+        for pair in pairs:
+            result[pair[0]] = pair[1]
+
+        return result
 
     def __init__(self, *args, **kwargs):
         self.__dict__.setdefault('_instrument_id', '')
@@ -60,17 +78,11 @@ class siglentSDG2000X(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
         self._arbitrary_waveform_size_min = 64
         self._arbitrary_waveform_quantum = 8
 
-        self._arbitrary_sequence_number_sequences_max = 0
-        self._arbitrary_sequence_loop_count_max = 0
-        self._arbitrary_sequence_length_max = 0
-        self._arbitrary_sequence_length_min = 0
-
         self._catalog_names = list()
 
         self._arbitrary_waveform_n = 0
-        self._arbitrary_sequence_n = 0
 
-        self._identity_description = "Siglent SDG2042X function/arbitrary waveform generator driver"
+        self._identity_description = "Siglent SDG2000X function/arbitrary waveform generator driver"
         self._identity_identifier = ""
         self._identity_revision = ""
         self._identity_vendor = ""
@@ -139,18 +151,27 @@ class siglentSDG2000X(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
     def _utility_disable(self):
         pass
 
-    def _utility_error_query(self):   # TODO
-        error_code = 0
-        error_message = "No error"
+    def _utility_error_query(self):
         if not self._driver_operation_simulate:
-            error_code, error_message = self._ask(":evmsg?").split(',')
-            error_code = int(error_code.split(' ', 1)[1])
-            if error_code == 1:
-                self._ask("*esr?")
-                error_code, error_message = self._ask(":evmsg?").split(',')
-                error_code = int(error_code.split(' ', 1)[1])
-            error_message = error_message.strip(' "')
-        return error_code, error_message
+            messages = {0: 'No error',
+                        1: 'Unrecognized command/query header',
+                        2: 'Invalid character',
+                        3: 'Invalid separator',
+                        4: 'Missing parameter',
+                        5: 'Unrecognized keyword',
+                        6: 'String error',
+                        7: 'Parameter can’t allowed',
+                        8: 'Command String Too Long',
+                        9: 'Query cannot allowed',
+                        10: 'Missing Query mask',
+                        11: 'Invalid parameter',
+                        12: 'Parameter syntax error',
+                        13: 'Filename too long',
+                        14: 'Directory not exist'
+                        }
+            error_code = int(self._ask("CMR?").split(' ')[1])
+            return error_code, messages[error_code]
+        return 0, 'No error'
 
     def _utility_lock_object(self):
         pass
@@ -173,7 +194,7 @@ class siglentSDG2000X(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
             code = int(self._read())
             if code != 0:
                 message = "Self test failed"
-        return (code, message)
+        return code, message
 
     def _utility_unlock_object(self):
         pass
@@ -188,7 +209,7 @@ class siglentSDG2000X(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
         for i in range(self._output_count):
             self._output_enabled.append(False)
 
-    def _load_catalog(self): # TODO
+    def _load_catalog(self):  # TODO
         self._catalog = list()
         self._catalog_names = list()
         if not self._driver_operation_simulate:
@@ -210,16 +231,20 @@ class siglentSDG2000X(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
             raise ivi.ValueNotSupportedException()
         self._output_operation_mode[index] = value
 
-    def _get_output_enabled(self, index): # TODO ------------------
+    def _get_output_enabled(self, index):
         index = ivi.get_index(self._output_name, index)
         if not self._driver_operation_simulate and not self._get_cache_valid(index=index):
-            resp = self._ask("%d:OUTP?" % (index + 1)).split(':')[1].split(',')[0]
-            if resp == 'OUTP ON':
+            resp = siglentSDG2000X._parse_response_to_dict(self._ask("C%d:OUTP?" % (index + 1)))
+            if not 'OUTP' in resp.keys():
+                raise ivi.UnexpectedResponseException()
+
+            resp_outp = resp['OUTP']
+            if resp_outp == 'ON':
                 self._output_enabled[index] = True
-            elif resp == 'OUTP OFF':
+            elif resp_outp == 'OFF':
                 self._output_enabled[index] = False
             else:
-                raise ivi.UnexpectedResponseException()
+
 
             self._set_cache_valid(index=index)
         return self._output_enabled[index]
@@ -228,28 +253,39 @@ class siglentSDG2000X(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
         index = ivi.get_index(self._output_name, index)
         value = bool(value)
         if not self._driver_operation_simulate:
-            self._write(":output:ch%d:state %d" % (index + 1, value))
+            self._write("C{}:OUTP {}".format(index + 1, 'ON' if value else 'OFF'))
         self._output_enabled[index] = value
         self._set_cache_valid(index=index)
 
     def _get_output_impedance(self, index):
         index = ivi.get_index(self._output_name, index)
-        self._output_impedance[index] = 50
+        if not self._driver_operation_simulate and not self._get_cache_valid(index=index):
+            resp = siglentSDG2000X._parse_response_to_dict(self._ask("C{}:OUTP?".format(index + 1)))
+            if not ('LOAD' in resp.keys()):
+                raise ivi.UnexpectedResponseException()
+
+            resp_load = resp['LOAD']
+            self._output_impedance[index] = 0 if resp_load == 'HZ' else int(resp_load)
+        self._set_cache_valid(index=index)
         return self._output_impedance[index]
 
     def _set_output_impedance(self, index, value):
         index = ivi.get_index(self._output_name, index)
-        value = 50
+        value = int(value)
+        if not self._driver_operation_simulate:
+            self._write("C{}:OUTP LOAD, {}".format(index + 1, value if value > 0 else 'HZ'))
+
         self._output_impedance[index] = value
+        self._set_cache_valid(index=index)
 
     def _get_output_mode(self, index):
         index = ivi.get_index(self._output_name, index)
         if not self._driver_operation_simulate and not self._get_cache_valid(index=index):
-            resp = self._ask(":fg:state?").split(' ', 1)[1]
-            if int(resp):
-                self._output_mode[index] = 'function'
-            else:
-                self._output_mode[index] = 'arbitrary'
+            resp = siglentSDG2000X._parse_response_to_dict(self._ask("C{}:BSWV?".format(index)))
+            if not 'WVTP' in resp.keys():
+                raise ivi.UnexpectedResponseException()
+
+            self._output_mode[index] = 'arbitrary' if (resp['WVTP'] == 'ARB') else 'function'
             self._set_cache_valid(index=index)
         return self._output_mode[index]
 
@@ -259,7 +295,7 @@ class siglentSDG2000X(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
             raise ivi.ValueNotSupportedException()
         if not self._driver_operation_simulate:
             if value == 'function':
-                self._write(":fg:state 1")
+                self._write("C{}:fg:state 1")
             elif value == 'arbitrary':
                 self._write(":fg:state 0")
         self._output_mode[index] = value
@@ -267,6 +303,7 @@ class siglentSDG2000X(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
             self._set_cache_valid(valid=False, index=k)
         self._set_cache_valid(index=index)
 
+    # TODO: ----------
     def _get_output_reference_clock_source(self, index):
         index = ivi.get_index(self._output_name, index)
         if not self._driver_operation_simulate and not self._get_cache_valid(index=index):
@@ -527,29 +564,8 @@ class siglentSDG2000X(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
 
         return handle
 
-    def _get_arbitrary_sequence_number_sequences_max(self):
-        return self._arbitrary_sequence_number_sequences_max
-
-    def _get_arbitrary_sequence_loop_count_max(self):
-        return self._arbitrary_sequence_loop_count_max
-
-    def _get_arbitrary_sequence_length_max(self):
-        return self._arbitrary_sequence_length_max
-
-    def _get_arbitrary_sequence_length_min(self):
-        return self._arbitrary_sequence_length_min
-
     def _arbitrary_clear_memory(self):
         pass
-
-    def _arbitrary_sequence_clear(self, handle):
-        pass
-
-    def _arbitrary_sequence_configure(self, index, handle, gain, offset):
-        pass
-
-    def _arbitrary_sequence_create(self, handle_list, loop_count_list):
-        return "handle"
 
     def send_software_trigger(self):
         if not self._driver_operation_simulate:
@@ -568,6 +584,3 @@ class siglentSDG2000X(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
         handle = self._arbitrary_waveform_create(data)
         self._set_output_arbitrary_waveform(index, handle)
         return handle
-
-
-
