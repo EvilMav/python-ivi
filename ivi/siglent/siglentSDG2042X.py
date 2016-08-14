@@ -25,10 +25,10 @@ THE SOFTWARE.
 
 """
 
-from .siglentSDG2000X import *
+from .siglentFgenBase import *
 
 
-class siglentSDG2042X(siglentSDG2000X):
+class siglentSDG2042X(siglentFgenBase):
     """Siglent SDG2042X function/arbitrary waveform generator driver"""
 
     def __init__(self, *args, **kwargs):
