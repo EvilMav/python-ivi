@@ -43,11 +43,11 @@ StandardWaveformMapping = {
 }
 
 
-# TODO: more groups? ModulateAM, ModulateFM
+# TODO: f-counter, AM/FM and other modulations, harmonics, sync modes, waveform combining
 class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
                       fgen.SoftwareTrigger, fgen.Burst,
                       fgen.ArbChannelWfm):
-    """ Siglent SDG2042X function/arbitrary waveform generator driver """
+    """ Siglent function/arbitrary waveform generator driver """
 
 # region Init
 
@@ -58,7 +58,6 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
 
         self._output_count = 2
         # TODO: set all this stuff when updating the usages
-        self._arbitrary_sample_rate = 0
         self._arbitrary_waveform_number_waveforms_max = 0
         self._arbitrary_waveform_size_max = 256 * 1024
         self._arbitrary_waveform_size_min = 64
@@ -68,18 +67,27 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
 
         self._arbitrary_waveform_n = 0
 
-        self._identity_description = "Siglent SDG2000X function/arbitrary waveform generator driver"
+        self._identity_description = "Siglent function/arbitrary waveform generator driver"
         self._identity_identifier = ""
         self._identity_revision = ""
         self._identity_vendor = ""
         self._identity_instrument_manufacturer = "Siglent"
         self._identity_instrument_model = ""
-        self._identity_instrument_firmware_revision = ""
+        self._identity_instrument_firmware_revision = "" #TODO: load from device
         self._identity_specification_major_version = 5
         self._identity_specification_minor_version = 0
-        self._identity_supported_instrument_models = ['SDG2042X', 'SDG2082X', 'SDG2122X']
+        self._identity_supported_instrument_models = []
 
         self._init_outputs()
+
+        self._add_property('arbitrary.sample_rate',
+                           self._get_arbitrary_sample_rate,
+                           self._set_arbitrary_sample_rate,
+                           None,
+                           """
+                           Specifies the sample rate of the arbitrary waveforms the function
+                           generator produces. The units are samples per second.
+                           """)
 
     def _initialize(self, resource=None, id_query=False, reset=False, **keywargs):
         """ Opens an I/O session to the instrument."""
@@ -175,7 +183,7 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
     @staticmethod
     def _strip_units(string_with_units):
         """ Removes non-numeric chracters to strip units from a numeric string """
-        return re.su.sub("[^a-zA-Z ]", '', string_with_units)
+        return re.sub("[^a-zA-Z ]", '', string_with_units)
 
     @staticmethod
     def _prepend_command_with_channel(command, index):
@@ -316,7 +324,7 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
 
         self._output_enabled = list()
         for i in range(self._output_count):
-            self._output_enabled.append(False)  # TODO: sync to device
+            self._get_output_enabled(i)
 
     def _load_catalog(self):  # TODO !!!!!!
         self._catalog = list()
@@ -397,184 +405,130 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
 
 # endregion
 
+# region Common methods for both wave modes
+
+    def _get_output_common_waveform_amplitude(self, index):
+        return self._get_scpi_option_cached('BSWV', option='AMP',
+                                            channel=index,
+                                            cast_cache=lambda amp: float(siglentFgenBase._strip_units(amp)))
+
+    def _set_output_common_waveform_amplitude(self, index, value):
+        self._set_scpi_option_cached(value, 'BSWV', option='AMP', channel=index)
+
+    def _get_output_common_waveform_dc_offset(self, index):
+        return self._get_scpi_option_cached('BSWV', option='OFST',
+                                            channel=index,
+                                            cast_cache=lambda ofst: float(siglentFgenBase._strip_units(ofst)))
+
+    def _set_output_common_waveform_dc_offset(self, index, value):
+        self._set_scpi_option_cached(value, 'BSWV', option='OFST', channel=index)
+
+    def _get_output_common_waveform_start_phase(self, index):
+        return self._get_scpi_option_cached('BSWV', option='PHSE',
+                                            channel=index,
+                                            cast_cache=lambda ph: float(siglentFgenBase._strip_units(ph)))
+
+    def _set_output_common_waveform_start_phase(self, index, value):
+        self._set_scpi_option_cached(value, 'BSWV', option='PHSE', channel=index)
+
+    def _get_output_common_waveform_frequency(self, index):
+        return self._get_scpi_option_cached('BSWV', option='FRQ',
+                                            channel=index,
+                                            cast_cache=lambda ph: float(siglentFgenBase._strip_units(ph)))
+
+    def _set_output_common_waveform_frequency(self, index, value):
+        self._set_scpi_option_cached(value, 'BSWV', option='FRQ', channel=index)
+# endregion
+
 # region Standard waveform mode
 
-    def _refresh_standard_waveform_mode(self, index):
-        """ Sets the last known standard waveform mode parameters """
-        # TODO (set at least the mode)
+    def _raise_if_not_function_mode(self, index):
+        if self._get_output_mode(index) != 'function':
+            raise ivi.OperationNotSupportedException('Operation is only available in function mode')
 
     def _get_output_standard_waveform_amplitude(self, index):
-        index = ivi.get_index(self._output_name, index)
-        if not self._driver_operation_simulate and self._get_output_mode(
-                index) == 'function' and not self._get_cache_valid(index=index):
-            resp = siglentFgenBase._parse_response_to_dict(self._ask("C{}:BSWV?".format(index)))
-            if 'AMP' not in resp.keys():
-                raise ivi.UnexpectedResponseException()
-            amp = siglentFgenBase._strip_units(resp['AMP'])
-            self._output_standard_waveform_amplitude[index] = float(amp)
-            self._set_cache_valid(index=index)
-        return self._output_standard_waveform_amplitude[index]
+        self._raise_if_not_function_mode(index)
+        return self._get_output_common_waveform_amplitude(index)
 
     def _set_output_standard_waveform_amplitude(self, index, value):
-        index = ivi.get_index(self._output_name, index)
-        value = float(value)
-        if not self._driver_operation_simulate and self._get_output_mode(index) == 'function':
-            self._write("C{}:BSWV AMP, {: f}".format(index + 1, value))
-        self._output_standard_waveform_amplitude[index] = value
-        self._set_cache_valid(index=index)
+        self._raise_if_not_function_mode(index)
+        self._set_output_common_waveform_amplitude(index, value)
 
     def _get_output_standard_waveform_dc_offset(self, index):
-        index = ivi.get_index(self._output_name, index)
-        if not self._driver_operation_simulate and self._get_output_mode(
-                index) == 'function' and not self._get_cache_valid(index=index):
-            resp = siglentFgenBase._parse_response_to_dict(self._ask("C{}:BSWV?".format(index)))
-            if 'OFST' not in resp.keys():
-                raise ivi.UnexpectedResponseException()
-            ofst = siglentFgenBase._strip_units(resp['OFST'])
-
-            self._output_standard_waveform_dc_offset[index] = float(ofst)
-            self._set_cache_valid(index=index)
-        return self._output_standard_waveform_dc_offset[index]
+        self._raise_if_not_function_mode(index)
+        return self._get_output_common_waveform_dc_offset(index)
 
     def _set_output_standard_waveform_dc_offset(self, index, value):
-        index = ivi.get_index(self._output_name, index)
-        value = float(value)
-        if not self._driver_operation_simulate and self._get_output_mode(index) == 'function':
-            self._write("C{}:BSWV OFST, {: f}".format(index + 1, value))
-        self._output_standard_waveform_dc_offset[index] = value
-        self._set_cache_valid(index=index)
+        self._raise_if_not_function_mode(index)
+        self._set_output_common_waveform_dc_offset(index, value)
 
     def _get_output_standard_waveform_duty_cycle_high(self, index):
-        index = ivi.get_index(self._output_name, index)
-        if not self._driver_operation_simulate and \
-                        self._get_output_mode(index) == 'function' and not self._get_cache_valid(index=index):
-            resp = siglentFgenBase._parse_response_to_dict(self._ask("C{}:BSWV?".format(index)))
-            if 'DUTY' not in resp.keys():
-                raise ivi.OperationNotSupportedException()  # likely not supported with the current waveform
-            duty = siglentFgenBase._strip_units(resp['DUTY'])
-            self._output_standard_waveform_duty_cycle_high[index] = float(duty)
-            self._set_cache_valid(index=index)
-        return self._output_standard_waveform_duty_cycle_high[index]
+        self._raise_if_not_function_mode(index)
+        return self._get_scpi_option_cached('BSWV', option='DUTY',
+                                            channel=index,
+                                            cast_cache=lambda ph: float(siglentFgenBase._strip_units(ph)))
 
     def _set_output_standard_waveform_duty_cycle_high(self, index, value):
-        index = ivi.get_index(self._output_name, index)
-        value = float(value)
-        if not self._driver_operation_simulate and self._get_output_mode(index) == 'function':
-            self._write("C{}:BSWV DUTY, {: f}".format(index + 1, value))
-        self._output_standard_waveform_duty_cycle_high[index] = value
-        self._set_cache_valid(index=index)
+        self._raise_if_not_function_mode(index)
+        if value < 0 || value > 100:
+            raise ivi.ValueNotSupportedException()
+
+        self._set_scpi_option_cached(value, 'BSWV', option='DUTY', channel=index)
 
     def _get_output_standard_waveform_start_phase(self, index):
-        index = ivi.get_index(self._output_name, index)
-        if not self._driver_operation_simulate and self._get_output_mode(
-                index) == 'function' and not self._get_cache_valid(index=index):
-            resp = siglentFgenBase._parse_response_to_dict(self._ask("C{}:BSWV?".format(index)))
-            if 'PHSE' not in resp.keys():
-                raise ivi.OperationNotSupportedException()  # likely not supported with the current waveform
-            phse = siglentFgenBase._strip_units(resp['PHSE'])
-            self._output_standard_waveform_start_phase[index] = float(phse)
-            self._set_cache_valid(index=index)
-        return self._output_standard_waveform_start_phase[index]
+        self._raise_if_not_function_mode(index)
+        return self._get_output_common_waveform_start_phase(index)
 
     def _set_output_standard_waveform_start_phase(self, index, value):
-        index = ivi.get_index(self._output_name, index)
-        value = float(value)
-        if not self._driver_operation_simulate and self._get_output_mode(index) == 'function':
-            self._write("C{}:BSWV PHSE, {: f}".format(index + 1, value))
-        self._output_standard_waveform_start_phase[index] = value
-        self._set_cache_valid(index=index)
+        self._raise_if_not_function_mode(index)
+        self._set_output_common_waveform_start_phase(index, value)
 
     def _get_output_standard_waveform_frequency(self, index):
-        index = ivi.get_index(self._output_name, index)
-        if not self._driver_operation_simulate and self._get_output_mode(
-                index) == 'function' and not self._get_cache_valid(index=index):
-            resp = siglentFgenBase._parse_response_to_dict(self._ask("C{}:BSWV?".format(index)))
-            if 'FRQ' not in resp.keys():
-                raise ivi.OperationNotSupportedException()  # likely not supported with the current waveform
-            frq = siglentFgenBase._strip_units(resp['FRQ'])
-            self._output_standard_waveform_frequency[index] = float(frq)
-            self._set_cache_valid(index=index)
-        return self._output_standard_waveform_frequency[index]
+        self._raise_if_not_function_mode(index)
+        return self._get_output_common_waveform_frequency(index)
 
     def _set_output_standard_waveform_frequency(self, index, value):
-        index = ivi.get_index(self._output_name, index)
-        value = float(value)
-        if not self._driver_operation_simulate and self._get_output_mode(index) == 'function':
-            self._write("C{}:BSWV FRQ, {: f}".format(index + 1, value))
-        self._output_standard_waveform_frequency[index] = value
-        self._set_cache_valid(index=index)
+        self._raise_if_not_function_mode(index)
+        self._set_output_common_waveform_frequency(index, value)
 
     def _get_output_standard_waveform_waveform(self, index):
-        index = ivi.get_index(self._output_name, index)
-        if not self._driver_operation_simulate and self._get_output_mode(
-                index) == 'function' and not self._get_cache_valid(index=index):
-            resp = siglentFgenBase._parse_response_to_dict(self._ask("C{}:BSWV?".format(index)))
-            if 'WVTP' not in resp.keys():
-                raise ivi.OperationNotSupportedException()  # likely not supported with the current waveform
-            wvtp = siglentFgenBase._strip_units(resp['WVTP'])
-            value = [k for k, v in StandardWaveformMapping.items() if v == wvtp][0]
-            self._output_standard_waveform_waveform[index] = value
-            self._set_cache_valid(index=index)
-        return self._output_standard_waveform_waveform[index]
+        self._raise_if_not_function_mode(index)
+        return self._get_scpi_option_cached('BSWV', option='WVTP',
+                                            channel=index,
+                                            cast_cache=lambda wf:
+                                                [k for k, v in StandardWaveformMapping.items() if v == wvtp][0])
 
     def _set_output_standard_waveform_waveform(self, index, value):
-        index = ivi.get_index(self._output_name, index)
-        if value not in StandardWaveformMapping:
-            raise ivi.ValueNotSupportedException()
-        if not self._driver_operation_simulate and self._get_output_mode(index) == 'function':
-            self._write("C{}:BSWV WVTP, {}".format(index + 1, StandardWaveformMapping[value]))
-        self._output_standard_waveform_waveform[index] = value
-        self._set_cache_valid(index=index)
+        self._raise_if_not_function_mode(index)
+        self._set_scpi_option_cached(value, 'BSWV', option='WVTP',
+                                     channel=index,
+                                     cast_option=lambda v: StandardWaveformMapping[v])
 
 # endregion
 
 # region Arbitrary waveform mode
 
-    def _refresh_arbitrary_waveform_mode(self, index):
-        pass  # TODO
+    def _raise_if_not_arbitrary_mode(self, index):
+        if self._get_output_mode(index) != 'arbitrary':
+            raise ivi.OperationNotSupportedException('Operation is only available in arbitrary mode')
 
     def _get_output_arbitrary_gain(self, index):
-        index = ivi.get_index(self._output_name, index)
-        if not self._driver_operation_simulate and self._get_output_mode(
-                index) == 'arbitrary' and not self._get_cache_valid(index=index):
-            resp = siglentFgenBase._parse_response_to_dict(self._ask("C{}:BSWV?".format(index)))
-            if 'AMP' not in resp.keys():
-                raise ivi.UnexpectedResponseException()
-            amp = siglentFgenBase._strip_units(resp['AMP'])
-            self._output_arbitrary_gain[index] = float(amp)
-            self._set_cache_valid(index=index)
-        return self._output_arbitrary_gain[index]
+        self._raise_if_not_arbitrary_mode(index)
+        return self._get_output_common_waveform_amplitude(index)
 
     def _set_output_arbitrary_gain(self, index, value):
-        index = ivi.get_index(self._output_name, index)
-        value = float(value)
-        if not self._driver_operation_simulate and self._get_output_mode(index) == 'arbitrary':
-            self._write("C{}:BSWV AMP, {: f}".format(index + 1, value))
-        self._output_arbitrary_gain[index] = value
-        self._set_cache_valid(index=index)
+        self._raise_if_not_arbitrary_mode(index)
+        self._set_output_common_waveform_amplitude(index, value)
 
     def _get_output_arbitrary_offset(self, index):
-        index = ivi.get_index(self._output_name, index)
-        if not self._driver_operation_simulate and self._get_output_mode(
-                index) == 'arbitrary' and not self._get_cache_valid(index=index):
-            resp = siglentFgenBase._parse_response_to_dict(self._ask("C{}:BSWV?".format(index)))
-            if 'OFST' not in resp.keys():
-                raise ivi.UnexpectedResponseException()
-            ofst = siglentFgenBase._strip_units(resp['OFST'])
-
-            self._output_arbitrary_offset[index] = float(ofst)
-            self._set_cache_valid(index=index)
-        return self._output_arbitrary_offset[index]
+        self._raise_if_not_arbitrary_mode(index)
+        return self._get_output_common_waveform_dc_offset(index)
 
     def _set_output_arbitrary_offset(self, index, value):
-        index = ivi.get_index(self._output_name, index)
-        value = float(value)
-        if not self._driver_operation_simulate and self._get_output_mode(index) == 'arbitrary':
-            self._write("C{}:BSWV OFST, {: f}".format(index + 1, value))
-        self._output_arbitrary_offset[index] = value
-        self._set_cache_valid(index=index)
+        self._raise_if_not_arbitrary_mode(index)
+        self._set_output_common_waveform_dc_offset(index, value)
 
-    def _get_output_arbitrary_waveform(self, index):
+    def _get_output_arbitrary_waveform(self, index): #TODO
         index = ivi.get_index(self._output_name, index)
         if not self._driver_operation_simulate and not self._get_cache_valid(index=index):
             resp = siglentFgenBase._parse_response_to_dict(self._ask("C{}:ARWV?".format(index)))
@@ -601,6 +555,8 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
         self._output_arbitrary_waveform[index] = value
 
     def _get_arbitrary_sample_rate(self):
+        raise ivi.OperationNotSupportedException('Sampling rate settings not supported: use frequency')
+
         if not self._driver_operation_simulate and not self._get_cache_valid():
             resp = self._ask(":clock:frequency?").split(' ', 1)[1]
             self._arbitrary_sample_rate = float(resp)

@@ -25,16 +25,17 @@ THE SOFTWARE.
 
 """
 
-from .siglentFgenBase import *
+from .siglentSDG2000X import *
 
 
-class siglentSDG2082X(siglentFgenBase):
+class siglentSDG2082X(siglentSDG2000X):
     """Siglent SDG2082X function/arbitrary waveform generator driver"""
 
     def __init__(self, *args, **kwargs):
         self.__dict__.setdefault('_instrument_id', 'SDG2082X')
 
         super(siglentSDG2082X, self).__init__(*args, **kwargs)
-        self._output_count = 2
+        self._identity_instrument_model = "SDG2082X"
+
 
 
