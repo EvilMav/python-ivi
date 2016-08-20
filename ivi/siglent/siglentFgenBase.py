@@ -29,6 +29,8 @@ import time
 import struct
 
 import re
+from abc import abstractmethod
+
 from numpy import *
 
 from .. import ivi
@@ -43,8 +45,8 @@ StandardWaveformMapping = {
 }
 
 
-# TODO: f-counter, AM/FM and other modulations, harmonics, sync modes, waveform combining
-class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
+# TODO: f-counter, AM/FM and other modulations, harmonics, sync modes, waveform combining, invert
+class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.ArbFrequency,
                       fgen.SoftwareTrigger, fgen.Burst,
                       fgen.ArbChannelWfm):
     """ Siglent function/arbitrary waveform generator driver """
@@ -56,14 +58,11 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
 
         super(siglentFgenBase, self).__init__(*args, **kwargs)
 
-        self._output_count = 2
         # TODO: set all this stuff when updating the usages
         self._arbitrary_waveform_number_waveforms_max = 0
         self._arbitrary_waveform_size_max = 256 * 1024
         self._arbitrary_waveform_size_min = 64
         self._arbitrary_waveform_quantum = 8
-
-        self._catalog_names = list()
 
         self._arbitrary_waveform_n = 0
 
@@ -71,23 +70,27 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
         self._identity_identifier = ""
         self._identity_revision = ""
         self._identity_vendor = ""
-        self._identity_instrument_manufacturer = "Siglent"
+        self._identity_instrument_manufacturer = ""
         self._identity_instrument_model = ""
-        self._identity_instrument_firmware_revision = "" #TODO: load from device
+        self._identity_instrument_firmware_revision = ""
         self._identity_specification_major_version = 5
         self._identity_specification_minor_version = 0
-        self._identity_supported_instrument_models = []
+
+        self._supports_cmr_query = False  # Not currently supported on SDG2000X and SDG1000X
+
+        self._output_standard_waveform_waveform = 'sine' # default waveform to switch
 
         self._init_outputs()
 
-        self._add_property('arbitrary.sample_rate',
-                           self._get_arbitrary_sample_rate,
-                           self._set_arbitrary_sample_rate,
-                           None,
-                           """
-                           Specifies the sample rate of the arbitrary waveforms the function
-                           generator produces. The units are samples per second.
-                           """)
+        # DEBUG only
+        def dbg_ask(str, f):
+            print(str)
+            res = f(str)
+            print(res)
+            return res
+        old_ask = self._ask
+        self._ask = lambda str: dbg_ask(str, old_ask)
+
 
     def _initialize(self, resource=None, id_query=False, reset=False, **keywargs):
         """ Opens an I/O session to the instrument."""
@@ -117,7 +120,7 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
             self._identity_instrument_firmware_revision = "Not available while simulating"
         else:
             lst = self._ask("*IDN?").split(",")
-            self._identity_instrument_manufacturer = lst[0]
+            self._identity_instrument_manufacturer = lst[0]   # TODO: load from device
             self._identity_instrument_model = lst[1]
             self._identity_instrument_firmware_revision = lst[3]
             self._set_cache_valid(True, 'identity_instrument_manufacturer')
@@ -153,6 +156,7 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
             resp='C1:CMD VALUE0, KEY1, VALUE1, KEY2'
             _parse_response_to_dict(resp) =
                 {'_CMD': 'CMD', '_CHANNEL': '1', 'CMD': 'VALUE0', 'KEY1': 'VALUE1', 'KEY2': 'VALUE2'} """
+
         header, data = tuple(resp.split(' ', 2))
 
         # extract command and channel ID
@@ -188,7 +192,7 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
     @staticmethod
     def _prepend_command_with_channel(command, index):
         """ If channel is not None, prepends command with "Cn:" where n is the index """
-        if index is None:
+        if index is None or index < 0:
             return command
 
         return "C{}:{}".format(index + 1, command)
@@ -205,7 +209,7 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
         else:
             self.__dict__['_' + tag][index] = value
 
-    def _get_scpi_option_cached(self, command, option=None, channel=None, tag=None, cast_cache=None):
+    def _get_scpi_option_cached(self, command, option=None, channel=None, tag=None, cast_cache=lambda v: v):
         """ Returns the cached value for the option or requests it from the device if non cached
 
             command - request command, without question mark, e.g. "OUTP" for request "C1:OUTP?"
@@ -218,24 +222,24 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
         """
 
         tag = self._get_cache_tag(tag, skip=2)
-        index = ivi.get_index(self._output_name, channel) if channel is not None else None
+        index = ivi.get_index(self._output_name, channel) if channel is not None else -1
 
         if not self._driver_operation_simulate and not self._get_cache_valid(tag=tag, index=index):
             command_with_channel = self._prepend_command_with_channel(command, index)
             option = command if option is None else option  # if option not set - set to equal command by default
-
-            resp = siglentFgenBase._parse_scpi_response_to_dict(self._ask(command_with_channel + '?'))
+            resp = self._ask(command_with_channel + '?')
+            resp = siglentFgenBase._parse_scpi_response_to_dict(resp)
             if not (option in resp.keys()):
                 raise ivi.UnexpectedResponseException()
 
-            value = resp[option] if cast_cache is None else cast_cache(resp[option])
+            value = cast_cache(resp[option])
             self._set_property_value_by_tag(tag, value, index)
             self._set_cache_valid(tag=tag, index=index)
             return value
         else:
             return self._get_property_value_by_tag(tag, index)
 
-    def _set_scpi_option_cached(self, value, command, option=None, channel=None, tag=None, cast_option=None):
+    def _set_scpi_option_cached(self, value, command, option=None, channel=None, tag=None, cast_option=lambda v: v):
         """ Sets the given option and updates the cache
 
             value   - value to set to
@@ -249,10 +253,10 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
         """
 
         tag = self._get_cache_tag(tag, skip=2)
-        index = ivi.get_index(self._output_name, channel) if channel is not None else None
+        index = ivi.get_index(self._output_name, channel) if channel is not None else -1
         command_with_channel = self._prepend_command_with_channel(command, index)
-        command_with_option = "{} {}".format(command_with_channel, value) if option is None else \
-                              "{} {}, {}".format(command_with_channel, option, value)
+        command_with_option = "{} {}".format(command_with_channel, cast_option(value)) if option is None else \
+                              "{} {}, {}".format(command_with_channel, option, cast_option(value))
         self._write(command_with_option)
         self._set_property_value_by_tag(tag, value, index)
         self._set_cache_valid(tag=tag, index=index)
@@ -262,9 +266,13 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
 # region Utility
 
     def _utility_disable(self):
-        pass
+        for i in range(0, self._output_count):
+            self._set_output_enabled(i, False)
 
     def _utility_error_query(self):
+        if not self._supports_cmr_query:
+            return 0, 'Not supported'
+
         if not self._driver_operation_simulate:
             messages = {0: 'No error',
                         1: 'Unrecognized command/query header',
@@ -291,7 +299,7 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
 
     def _utility_reset(self):
         if not self._driver_operation_simulate:
-            self._write("*RST")
+            self._write("*RST")                         # does NOT work in the original SDG firmware
             self.driver_operation.invalidate_all_attributes()
 
     def _utility_reset_with_defaults(self):
@@ -301,7 +309,7 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
         code = 0
         message = "Self test passed"
         if not self._driver_operation_simulate:
-            self._write("*TST?")
+            self._write("*TST?")                        # dies NOT work in the original SDG firmware
             # wait for test to complete
             time.sleep(60)
             code = int(self._read())
@@ -322,21 +330,25 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
         except AttributeError:
             pass
 
+        # initialize channel-indexed lists: values will be updated by the getters on demand
         self._output_enabled = list()
+        self._output_operation_mode = list()
+        self._output_impedance = list()
+        self._output_standard_waveform_waveform = list()
+        self._output_common_waveform_amplitude = list()
+        self._output_common_waveform_dc_offset = list()
+        self._output_common_waveform_start_phase = list()
+        self._output_common_waveform_frequency = list()
+
         for i in range(self._output_count):
-            self._get_output_enabled(i)
-
-    def _load_catalog(self):  # TODO !!!!!!
-        self._catalog = list()
-        self._catalog_names = list()
-        if not self._driver_operation_simulate:
-            raw = self._ask(":memory:catalog:all?").lower()
-            raw = raw.split(' ', 1)[1]
-
-            l = raw.split(',')
-            l = [s.strip('"') for s in l]
-            self._catalog = [l[i:i + 3] for i in range(0, len(l), 3)]
-            self._catalog_names = [l[0] for l in self._catalog]
+            self._output_enabled.append(False)
+            self._output_operation_mode.append('continuous')
+            self._output_impedance.append(0)
+            self._output_standard_waveform_waveform.append('sine')
+            self._output_common_waveform_amplitude.append(1.0)
+            self._output_common_waveform_dc_offset.append(0.0)
+            self._output_common_waveform_start_phase.append(0.0)
+            self._output_common_waveform_frequency.append(1000)
 
     def _get_output_operation_mode(self, index):
         index = ivi.get_index(self._output_name, index)
@@ -354,6 +366,11 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
                                             cast_cache=lambda resp: True if resp == 'ON' else False)
 
     def _set_output_enabled(self, index, value):
+        try:
+            value = bool(value)
+        except:
+            raise ivi.InvalidOptionValueException('Value must be a boolean')
+
         self._set_scpi_option_cached(value,
                                      'OUTP',
                                      channel=index,
@@ -362,9 +379,14 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
     def _get_output_impedance(self, index):
         return self._get_scpi_option_cached('OUTP', option='LOAD',
                                             channel=index,
-                                            cast_cache=lambda l: 0 if load == 'HZ' else int(l))
+                                            cast_cache=lambda l: 0 if l == 'HZ' else int(l))
 
     def _set_output_impedance(self, index, value):
+        try:
+            value = int(value)
+        except:
+            raise ivi.InvalidOptionValueException('Value must be an int')
+
         self._set_scpi_option_cached(int(value),
                                      'OUTP', option='LOAD',
                                      channel=index,
@@ -383,7 +405,7 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
                                      'BSWV', option='WVTP',
                                      channel=index,
                                      cast_option=lambda t: 'ARB' if t == 'arbitrary' else
-                                                    StandardWaveformMapping[self._output_standard_waveform_waveform])
+                                     StandardWaveformMapping[self._output_standard_waveform_waveform[index]])
 
     def _get_output_reference_clock_source(self, index):
         return self._get_scpi_option_cached('ROSC',
@@ -393,7 +415,9 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
         if value not in fgen.SampleClockSource:
             raise ivi.ValueNotSupportedException()
 
-        self._set_scpi_option_cached(int(value),
+        print("Per-channel clock source selection is not supported by the generator. Both channels will be switched.")
+
+        self._set_scpi_option_cached(value,
                                      'ROSC',
                                      cast_option=lambda t: 'INT' if t == 'internal' else 'EXT')
 
@@ -413,6 +437,13 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
                                             cast_cache=lambda amp: float(siglentFgenBase._strip_units(amp)))
 
     def _set_output_common_waveform_amplitude(self, index, value):
+        try:
+            value = float(value)
+            if value <= 0.0:
+                raise Exception()
+        except:
+            raise ivi.InvalidOptionValueException('Value must be a float bigger then 0')
+
         self._set_scpi_option_cached(value, 'BSWV', option='AMP', channel=index)
 
     def _get_output_common_waveform_dc_offset(self, index):
@@ -421,6 +452,11 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
                                             cast_cache=lambda ofst: float(siglentFgenBase._strip_units(ofst)))
 
     def _set_output_common_waveform_dc_offset(self, index, value):
+        try:
+            value = float(value)
+        except:
+            raise ivi.InvalidOptionValueException('Value must be a float')
+
         self._set_scpi_option_cached(value, 'BSWV', option='OFST', channel=index)
 
     def _get_output_common_waveform_start_phase(self, index):
@@ -429,6 +465,13 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
                                             cast_cache=lambda ph: float(siglentFgenBase._strip_units(ph)))
 
     def _set_output_common_waveform_start_phase(self, index, value):
+        try:
+            value = float(value)
+            if value < 0.0 or value > 360.0:
+                raise Exception()
+        except:
+            raise ivi.InvalidOptionValueException('Value must be a float between 0 and 360')
+
         self._set_scpi_option_cached(value, 'BSWV', option='PHSE', channel=index)
 
     def _get_output_common_waveform_frequency(self, index):
@@ -437,6 +480,13 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
                                             cast_cache=lambda ph: float(siglentFgenBase._strip_units(ph)))
 
     def _set_output_common_waveform_frequency(self, index, value):
+        try:
+            value = float(value)
+            if value <= 0.0:
+                raise Exception()
+        except:
+            raise ivi.InvalidOptionValueException('Value must be a float higher then 0')
+
         self._set_scpi_option_cached(value, 'BSWV', option='FRQ', channel=index)
 # endregion
 
@@ -470,7 +520,7 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
 
     def _set_output_standard_waveform_duty_cycle_high(self, index, value):
         self._raise_if_not_function_mode(index)
-        if value < 0 || value > 100:
+        if value < 0 or value > 100:
             raise ivi.ValueNotSupportedException()
 
         self._set_scpi_option_cached(value, 'BSWV', option='DUTY', channel=index)
@@ -528,7 +578,18 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
         self._raise_if_not_arbitrary_mode(index)
         self._set_output_common_waveform_dc_offset(index, value)
 
+    def _get_output_arbitrary_waveform_frequency(self, index):
+        self._raise_if_not_arbitrary_mode(index)
+        return self._get_output_common_waveform_frequency(index)
+
+    def _set_output_arbitrary_waveform_frequency(self, index, value):
+        self._raise_if_not_arbitrary_mode(index)                    #TODO: invalidate sample rate
+        self._set_output_common_waveform_frequency(index, value)
+
+    @abstractmethod
     def _get_output_arbitrary_waveform(self, index): #TODO
+        return
+
         index = ivi.get_index(self._output_name, index)
         if not self._driver_operation_simulate and not self._get_cache_valid(index=index):
             resp = siglentFgenBase._parse_response_to_dict(self._ask("C{}:ARWV?".format(index)))
@@ -539,7 +600,10 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
             self._set_cache_valid(index=index)
         return self._output_arbitrary_waveform[index]
 
-    def _set_output_arbitrary_waveform(self, index, value):
+    @abstractmethod
+    def _set_output_arbitrary_waveform(self, index, value): #TODO
+        pass
+
         index = ivi.get_index(self._output_name, index)
         value = str(value).lower()
         # extension must be wfm
@@ -555,20 +619,10 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
         self._output_arbitrary_waveform[index] = value
 
     def _get_arbitrary_sample_rate(self):
-        raise ivi.OperationNotSupportedException('Sampling rate settings not supported: use frequency')
-
-        if not self._driver_operation_simulate and not self._get_cache_valid():
-            resp = self._ask(":clock:frequency?").split(' ', 1)[1]
-            self._arbitrary_sample_rate = float(resp)
-            self._set_cache_valid()
-        return self._arbitrary_sample_rate
+        raise ivi.OperationNotSupportedException('IVI-compilant Sampling rate settings not supported: use frequency')
 
     def _set_arbitrary_sample_rate(self, value):
-        value = float(value)
-        if not self._driver_operation_simulate:
-            self._write(":clock:frequency %e" % value)
-        self._arbitrary_sample_rate = value
-        self._set_cache_valid()
+        raise ivi.OperationNotSupportedException('IVI-compilant Sampling rate settings not supported: use frequency')
 
     def _get_arbitrary_waveform_number_waveforms_max(self):
         return self._arbitrary_waveform_number_waveforms_max

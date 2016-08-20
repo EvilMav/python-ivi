@@ -27,41 +27,78 @@ THE SOFTWARE.
 from .siglentFgenBase import *
 
 
-# TODO: f-counter, AM/FM and other modulations, harmonics, sync modes, waveform combining
+ArbitraryModes = ['DDS', 'TrueArb']
+
 class siglentSDG2000X(siglentFgenBase):
     """ Siglent SDG2000X function/arbitrary waveform generator driver """
-    #TODO: srate, truearb/dds mode switches
 
     def __init__(self, *args, **kwargs):
-        self.__dict__.setdefault('_instrument_id', '')
+        super(siglentSDG2000X, self).__init__(*args, **kwargs)
 
         self._output_count = 2
+
         # TODO: set all this stuff when updating the usages
-        self._arbitrary_sample_rate = 0
+        self._arbitrary_sample_rate_max = 75000000
         self._arbitrary_waveform_number_waveforms_max = 0
         self._arbitrary_waveform_size_max = 256 * 1024
         self._arbitrary_waveform_size_min = 64
         self._arbitrary_waveform_quantum = 8
-
-        super(siglentSDG2000X, self).__init__(*args, **kwargs)
-
-        self._catalog_names = list()
-
         self._arbitrary_waveform_n = 0
 
-        self._identity_description = "Siglent function/arbitrary waveform generator driver"
-        self._identity_instrument_model = "SDG2000X"
-        self._identity_specification_major_version = 5
-        self._identity_specification_minor_version = 0
+        self._arb_store_names = list()
         self._identity_supported_instrument_models = ['SDG2042X', 'SDG2082X', 'SDG2122X']
 
         self._init_outputs()
 
-        self._add_property('arbitrary.sample_rate',
-                           self._get_arbitrary_sample_rate,
-                           self._set_arbitrary_sample_rate,
+        self._add_property('outputs[].arbitrary.sample_rate',
+                           self._get_output_arbitrary_sample_rate,
+                           self._set_output_arbitrary_sample_rate,
                            None,
                            """
-                           Specifies the sample rate of the arbitrary waveforms the function
-                           generator produces. The units are samples per second.
+                           Supported only in TrueArb arbitrary mode, use arbitrary.arb_mode to set.
+                           Gets or sets TrueArb sample rate.
                            """)
+
+        self._add_property('outputs[].arbitrary.arb_mode',
+                           self._get_output_arbitrary_arb_mode,
+                           self._set_output_arbitrary_arb_mode,
+                           None,
+                           """
+                           Selects between 'TrueArb' and 'DDS' modes. Note that a direct sample rate selection
+                           is only supported in the former.
+                           """)
+
+# region ARB waveform store management
+
+    def _get_arb_store_names(self):
+        """ Returns the current list of arbitrary waveform """
+
+        if not self._driver_operation_simulate:
+            raw = self._ask("STM? USER").lower()
+            raw = raw.split(',', 1)[1]
+
+            l = raw.split(',')
+            l = [s.strip('"') for s in l]
+            self._catalog = [l[i:i + 3] for i in range(0, len(l), 3)]
+            self._catalog_names = [l[0] for l in self._catalog]
+
+# endregion
+
+
+    def _get_arbitrary_sample_rate(self):
+        raise ivi.OperationNotSupportedException('Sample rate must be set on a per-channel basis') # todo
+
+    def _set_arbitrary_sample_rate(self, value):
+        raise ivi.OperationNotSupportedException('Sample rate must be set on a per-channel basis')
+
+    def _get_output_arbitrary_sample_rate(self, index):
+        pass #TODO
+
+    def _set_output_arbitrary_sample_rate(self, index, value):
+        pass #TODO
+
+    def _get_output_arbitrary_arb_mode(self, index):
+        pass #TODO
+
+    def _set_output_arbitrary_arb_mode(self, index, value):
+        pass #TODO
