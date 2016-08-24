@@ -26,10 +26,10 @@ THE SOFTWARE.
 """
 
 import time
-import struct
 
 import re
 from abc import abstractmethod
+from warnings import warn
 
 from numpy import *
 
@@ -58,13 +58,12 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.Arb
 
         super(siglentFgenBase, self).__init__(*args, **kwargs)
 
-        # TODO: set all this stuff when updating the usages
         self._arbitrary_waveform_number_waveforms_max = 0
-        self._arbitrary_waveform_size_max = 256 * 1024
-        self._arbitrary_waveform_size_min = 64
-        self._arbitrary_waveform_quantum = 8
+        self._arbitrary_waveform_size_max = 8000000
+        self._arbitrary_waveform_size_min = 8
+        self._arbitrary_waveform_quantum = 1
 
-        self._arbitrary_waveform_n = 0
+        self._arbitrary_waveform_n = 0 #TODO
 
         self._identity_description = "Siglent function/arbitrary waveform generator driver"
         self._identity_identifier = ""
@@ -183,6 +182,13 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.Arb
             result[pair[0]] = pair[1]
 
         return result
+
+    @staticmethod
+    def _convert_waveform_data(data):
+        def convert_sample(sample):
+            pass # TODO
+
+        return len(data), map(convert_sample, data).join('')
 
     @staticmethod
     def _strip_units(string_with_units):
@@ -343,12 +349,7 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.Arb
         for i in range(self._output_count):
             self._output_enabled.append(False)
             self._output_operation_mode.append('continuous')
-            self._output_impedance.append(0)
-            self._output_standard_waveform_waveform.append('sine')
-            self._output_common_waveform_amplitude.append(1.0)
-            self._output_common_waveform_dc_offset.append(0.0)
-            self._output_common_waveform_start_phase.append(0.0)
-            self._output_common_waveform_frequency.append(1000)
+            self._output_impedance.append(0) # todo: neccessary?
 
     def _get_output_operation_mode(self, index):
         index = ivi.get_index(self._output_name, index)
@@ -415,7 +416,7 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.Arb
         if value not in fgen.SampleClockSource:
             raise ivi.ValueNotSupportedException()
 
-        print("Per-channel clock source selection is not supported by the generator. Both channels will be switched.")
+        warn("Per-channel clock source selection is not supported by the generator. Both channels will be switched.")
 
         self._set_scpi_option_cached(value,
                                      'ROSC',
@@ -492,9 +493,8 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.Arb
 
 # region Standard waveform mode
 
-    def _raise_if_not_function_mode(self, index):
-        if self._get_output_mode(index) != 'function':
-            raise ivi.OperationNotSupportedException('Operation is only available in function mode')
+    def _is_in_function_mode(self, index):
+        return self._get_output_mode(index) != 'function'
 
     def _get_output_standard_waveform_amplitude(self, index):
         self._raise_if_not_function_mode(index)
@@ -583,8 +583,11 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.Arb
         return self._get_output_common_waveform_frequency(index)
 
     def _set_output_arbitrary_waveform_frequency(self, index, value):
-        self._raise_if_not_arbitrary_mode(index)                    #TODO: invalidate sample rate
+        self._raise_if_not_arbitrary_mode(index)                    #TODO
         self._set_output_common_waveform_frequency(index, value)
+
+        self._set_cache_valid(valid=False, tag='_output_arbitrary_sample_rate', index=index)
+        self._set_cache_valid(valid=False, tag='_arbitrary_sample_rate', index=index)
 
     @abstractmethod
     def _get_output_arbitrary_waveform(self, index): #TODO
@@ -604,103 +607,20 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.Arb
     def _set_output_arbitrary_waveform(self, index, value): #TODO
         pass
 
-        index = ivi.get_index(self._output_name, index)
-        value = str(value).lower()
-        # extension must be wfm
-        ext = value.split('.').pop()
-        if ext != 'wfm':
-            raise ivi.ValueNotSupportedException()
-        # waveform must exist on arb
-        self._load_catalog()
-        if value not in self._catalog_names:
-            raise ivi.ValueNotSupportedException()
-        if not self._driver_operation_simulate:
-            self._write(":ch%d:waveform \"%s\"" % (index + 1, value))
-        self._output_arbitrary_waveform[index] = value
-
+    @abstractmethod
     def _get_arbitrary_sample_rate(self):
-        raise ivi.OperationNotSupportedException('IVI-compilant Sampling rate settings not supported: use frequency')
+        pass
 
+    @abstractmethod
     def _set_arbitrary_sample_rate(self, value):
-        raise ivi.OperationNotSupportedException('IVI-compilant Sampling rate settings not supported: use frequency')
-
-    def _get_arbitrary_waveform_number_waveforms_max(self):
-        return self._arbitrary_waveform_number_waveforms_max
-
-    def _get_arbitrary_waveform_size_max(self):
-        return self._arbitrary_waveform_size_max
-
-    def _get_arbitrary_waveform_size_min(self):
-        return self._arbitrary_waveform_size_min
-
-    def _get_arbitrary_waveform_quantum(self):
-        return self._arbitrary_waveform_quantum
+        pass
 
     def _arbitrary_waveform_clear(self, handle):
         pass
 
+    @abstractmethod
     def _arbitrary_waveform_create(self, data):
-        y = None
-        x = None
-        if type(data) == list and type(data[0]) == float:
-            # list
-            y = array(data)
-        elif type(data) == ndarray and len(data.shape) == 1:
-            # 1D array
-            y = data
-        elif type(data) == ndarray and len(data.shape) == 2 and data.shape[0] == 1:
-            # 2D array, hieght 1
-            y = data[0]
-        elif type(data) == ndarray and len(data.shape) == 2 and data.shape[1] == 1:
-            # 2D array, width 1
-            y = data[:, 0]
-        else:
-            x, y = ivi.get_sig(data)
-
-        if x is None:
-            x = arange(0, len(y)) / 10e6
-
-        if len(y) % self._arbitrary_waveform_quantum != 0:
-            raise ivi.ValueNotSupportedException()
-
-        xincr = ivi.rms(diff(x))
-
-        # get unused handle
-        self._load_catalog()
-        have_handle = False
-        while not have_handle:
-            self._arbitrary_waveform_n += 1
-            handle = "w%04d.wfm" % self._arbitrary_waveform_n
-            have_handle = handle not in self._catalog_names
-        self._write(":data:destination \"%s\"" % handle)
-        self._write(":wfmpre:bit_nr 12")
-        self._write(":wfmpre:bn_fmt rp")
-        self._write(":wfmpre:byt_nr 2")
-        self._write(":wfmpre:byt_or msb")
-        self._write(":wfmpre:encdg bin")
-        self._write(":wfmpre:pt_fmt y")
-        self._write(":wfmpre:yzero 0")
-        self._write(":wfmpre:ymult %e" % (2 / (1 << 12)))
-        self._write(":wfmpre:xincr %e" % xincr)
-
-        raw_data = b''
-
-        for f in y:
-            # clip at -1 and 1
-            if f > 1.0: f = 1.0
-            if f < -1.0: f = -1.0
-
-            f = (f + 1) / 2
-
-            # scale to 12 bits
-            i = int(f * ((1 << 12) - 2) + 0.5) & 0x000fffff
-
-            # add to raw data, MSB first
-            raw_data = raw_data + struct.pack('>H', i)
-
-        self._write_ieee_block(raw_data, ':curve ')
-
-        return handle
+        pass
 
     def _arbitrary_clear_memory(self):
         pass
@@ -722,7 +642,7 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.Arb
         value = int(value)
         self._output_burst_count[index] = value
 
-    def _arbitrary_waveform_create_channel_waveform(self, index, data):
+    def _arbitrary_waveform_create_channel_waveform(self, index, data): 
         handle = self._arbitrary_waveform_create(data)
         self._set_output_arbitrary_waveform(index, handle)
         return handle

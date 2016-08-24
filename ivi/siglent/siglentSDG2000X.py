@@ -25,9 +25,10 @@ THE SOFTWARE.
 """
 
 from .siglentFgenBase import *
-
+from warnings import warn
 
 ArbitraryModes = ['DDS', 'TrueArb']
+
 
 class siglentSDG2000X(siglentFgenBase):
     """ Siglent SDG2000X function/arbitrary waveform generator driver """
@@ -68,37 +69,76 @@ class siglentSDG2000X(siglentFgenBase):
                            is only supported in the former.
                            """)
 
-# region ARB waveform store management
+    # region ARB waveform store management
 
-    def _get_arb_store_names(self):
+    def _get_user_arb_store_names(self):
         """ Returns the current list of arbitrary waveform """
 
         if not self._driver_operation_simulate:
-            raw = self._ask("STM? USER").lower()
-            raw = raw.split(',', 1)[1]
+            raw = self._ask("STL? USER")
+            names = raw.split(',')
+            if names[0] != 'STL WVNM':
+                raise ivi.UnexpectedResponseException()
 
-            l = raw.split(',')
-            l = [s.strip('"') for s in l]
-            self._catalog = [l[i:i + 3] for i in range(0, len(l), 3)]
-            self._catalog_names = [l[0] for l in self._catalog]
+            self._arb_store_names = names[1:]
+        return self._arb_store_names
 
-# endregion
+    # endregion
 
+    # region Sample rate selection
+
+    def _raise_if_bad_sample_rate(self, srate):
+        if srate <= 0 or srate > self._arbitrary_sample_rate_max:
+            raise ivi.InvalidOptionValueException('Sample rate exceeds supported TrueArb range')
 
     def _get_arbitrary_sample_rate(self):
-        raise ivi.OperationNotSupportedException('Sample rate must be set on a per-channel basis') # todo
+        srates = [self._get_output_arbitrary_sample_rate(i) for i in range(self._output_count)]
+        if not all(srate == srates[0] for srate in srates):
+            raise ivi.OperationNotSupportedException(
+                'Sample rates differ between channels: use a per-channel frequency info')
+
+        return srates[0]
 
     def _set_arbitrary_sample_rate(self, value):
-        raise ivi.OperationNotSupportedException('Sample rate must be set on a per-channel basis')
+        self._raise_if_bad_sample_rate(value)
+        for i in range(self._output_count):
+            self._set_output_arbitrary_arb_mode(i, value)
 
     def _get_output_arbitrary_sample_rate(self, index):
-        pass #TODO
+        return self._get_scpi_option_cached('SRATE', option='VALUE',
+                                            channel=index,
+                                            cast_cache=lambda x: super(siglentSDG2000X)._strip_units(x))
 
     def _set_output_arbitrary_sample_rate(self, index, value):
-        pass #TODO
+        self._raise_if_bad_sample_rate(value)
+
+        if self._get_output_arbitrary_arb_mode(index) != 'TrueArb':
+            warn('Sample rate selection is only supported in TrueArb mode. Switching to TrueArb. ' +
+                 'To stay in DDS mode set frequency instead')
+            self._set_output_arbitrary_arb_mode(index, 'TrueArb')
+
+        self._set_scpi_option_cached(value, 'SRATE', option='VALUE',
+                                     channel=index)
+
+        self._set_cache_valid(valid=False, tag='_output_arbitrary_waveform_frequency', index=index)
+        self._set_cache_valid(valid=False, tag='_arbitrary_sample_rate', index=index)
 
     def _get_output_arbitrary_arb_mode(self, index):
-        pass #TODO
+        return self._get_scpi_option_cached('SRATE', option='MODE',
+                                            channel=index,
+                                            cast_cache=lambda am: 'DDS' if am == 'DDS' else 'TrueARB')
 
     def _set_output_arbitrary_arb_mode(self, index, value):
-        pass #TODO
+        if value not in ArbitraryModes:
+            raise ivi.InvalidOptionValueException('Unknown mode')
+
+        self._set_scpi_option_cached(value, 'SRATE', option='MODE',
+                                     channel=index,
+                                     cast_option=lambda am: 'DDS' if am == 'DDS' else 'TARB')
+
+        self._set_cache_valid(valid=False, tag='_output_arbitrary_waveform_frequency', index=index)
+        self._set_cache_valid(valid=False, tag='_output_arbitrary_sample_rate', index=index)
+        self._set_cache_valid(valid=False, tag='_arbitrary_sample_rate', index=index)
+
+    # endregion
+
