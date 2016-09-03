@@ -25,7 +25,6 @@ THE SOFTWARE.
 """
 
 from .siglentFgenBase import *
-from warnings import warn
 
 ArbitraryModes = ['DDS', 'TrueArb']
 
@@ -38,12 +37,11 @@ class siglentSDG2000X(siglentFgenBase):
 
         self._output_count = 2
 
-        # TODO: set all this stuff when updating the usages
         self._arbitrary_sample_rate_max = 75000000
         self._arbitrary_waveform_number_waveforms_max = 0
-        self._arbitrary_waveform_size_max = 256 * 1024
-        self._arbitrary_waveform_size_min = 64
-        self._arbitrary_waveform_quantum = 8
+        self._arbitrary_waveform_size_max = 4000000
+        self._arbitrary_waveform_size_min = 4
+        self._arbitrary_waveform_quantum = 4
         self._arbitrary_waveform_n = 0
 
         self._arb_store_names = list()
@@ -109,16 +107,18 @@ class siglentSDG2000X(siglentFgenBase):
                                             channel=index,
                                             cast_cache=lambda x: super(siglentSDG2000X)._strip_units(x))
 
-    def _set_output_arbitrary_sample_rate(self, index, value):
+    def _set_output_arbitrary_sample_rate(self, channel, value):
         self._raise_if_bad_sample_rate(value)
 
-        if self._get_output_arbitrary_arb_mode(index) != 'TrueArb':
+        if self._get_output_arbitrary_arb_mode(channel) != 'TrueArb':
             warn('Sample rate selection is only supported in TrueArb mode. Switching to TrueArb. ' +
                  'To stay in DDS mode set frequency instead')
-            self._set_output_arbitrary_arb_mode(index, 'TrueArb')
+            self._set_output_arbitrary_arb_mode(channel, 'TrueArb')
 
-        self._set_scpi_option_cached(value, 'SRATE', option='VALUE',
-                                     channel=index)
+        self._set_scpi_option_cached(value, 'SRATE', option='VALUE', channel=channel)
+
+        index = ivi.get_index(self._output_name, channel)
+        self._output_arbitrary_frequency_mode[index] = 'sample_rate'
 
         self._set_cache_valid(valid=False, tag='_output_arbitrary_waveform_frequency', index=index)
         self._set_cache_valid(valid=False, tag='_arbitrary_sample_rate', index=index)
@@ -142,3 +142,46 @@ class siglentSDG2000X(siglentFgenBase):
 
     # endregion
 
+    # region Arbirtary waveform catalog management
+
+    def _arbitrary_waveform_clear(self, handle):
+        # if handle in self._arb_store_names:
+        #    self._arb_store_names.remove(handle)
+
+        # TODO: Siglent's current programming manual is not providing any way to remove a waveform by name!
+
+    def _arbitrary_waveform_create(self, data):
+        arb_handles = self._get_user_arb_store_names()
+
+        # find a free handle
+        new_handle = ''
+        for i in itertools.count():
+            new_handle = 'pivi'+str(i)
+            if new_handle not in arb_handles:
+                break
+
+        length, data_encoded = super(siglentSDG2000X)._convert_waveform_data(data)
+        # C1: or C2: doesn't seem to matter for the common memory, but needs to be there for the command to be accepted
+        self._write_raw('C1:WVDT WVNM,{0},LENGTH,{1},WAVEDATA,{2:b}\n'.format(new_handle, length, data_encoded))
+        self._arb_store_names.append(new_handle)
+
+        return new_handle
+
+    def _arbitrary_clear_memory(self):
+        arb_handles = self._get_user_arb_store_names()
+        for handle in arb_handles:
+            self._arbitrary_waveform_clear(handle)
+
+    @abstractmethod
+    def _get_output_arbitrary_waveform(self, index):
+        return self._get_scpi_option_cached('ARWV', option='NAME',
+                                            channel=index)
+
+    @abstractmethod
+    def _set_output_arbitrary_waveform(self, index, value):
+        if value not in self._get_user_arb_store_names():
+            raise ivi.InvalidOptionValueException()
+
+        self._set_scpi_option_cached(value, 'ARWV', option='NAME', channel=index)
+
+    # endregion
