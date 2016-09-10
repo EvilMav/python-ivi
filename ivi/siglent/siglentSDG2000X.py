@@ -47,15 +47,14 @@ class siglentSDG2000X(siglentFgenBase):
         self._arb_store_names = list()
         self._identity_supported_instrument_models = ['SDG2042X', 'SDG2082X', 'SDG2122X']
 
-        self._init_outputs()
-
         self._add_property('outputs[].arbitrary.sample_rate',
                            self._get_output_arbitrary_sample_rate,
                            self._set_output_arbitrary_sample_rate,
                            None,
                            """
-                           Supported only in TrueArb arbitrary mode, use arbitrary.arb_mode to set.
                            Gets or sets TrueArb sample rate.
+
+                           Supported only in TrueArb arbitrary mode, use outputs[].arbitrary.arb_mode to set.
                            """)
 
         self._add_property('outputs[].arbitrary.arb_mode',
@@ -66,6 +65,21 @@ class siglentSDG2000X(siglentFgenBase):
                            Selects between 'TrueArb' and 'DDS' modes. Note that a direct sample rate selection
                            is only supported in the former.
                            """)
+
+        self._init_outputs()
+
+    def _init_outputs(self):
+        try:
+            super(siglentSDG2000X, self)._init_outputs()
+        except AttributeError:
+            pass
+
+        self._output_arbitrary_arb_mode = list()
+        self._output_arbitrary_sample_rate = list()
+
+        for i in range(self._output_count):
+            self._output_arbitrary_arb_mode.append('DDS')
+            self._output_arbitrary_sample_rate.append(0)
 
     # region ARB waveform store management
 
@@ -111,22 +125,20 @@ class siglentSDG2000X(siglentFgenBase):
         self._raise_if_bad_sample_rate(value)
 
         if self._get_output_arbitrary_arb_mode(channel) != 'TrueArb':
-            warn('Sample rate selection is only supported in TrueArb mode. Switching to TrueArb. ' +
+            warn('Sample rate selection is only supported in TrueArb mode. Switching to TrueArb. \n' +
                  'To stay in DDS mode set frequency instead')
             self._set_output_arbitrary_arb_mode(channel, 'TrueArb')
 
         self._set_scpi_option_cached(value, 'SRATE', option='VALUE', channel=channel)
 
         index = ivi.get_index(self._output_name, channel)
-        self._output_arbitrary_frequency_mode[index] = 'sample_rate'
-
         self._set_cache_valid(valid=False, tag='_output_arbitrary_waveform_frequency', index=index)
         self._set_cache_valid(valid=False, tag='_arbitrary_sample_rate', index=index)
 
     def _get_output_arbitrary_arb_mode(self, index):
         return self._get_scpi_option_cached('SRATE', option='MODE',
                                             channel=index,
-                                            cast_cache=lambda am: 'DDS' if am == 'DDS' else 'TrueARB')
+                                            cast_cache=lambda am: 'DDS' if am == 'DDS' else 'TrueArb')
 
     def _set_output_arbitrary_arb_mode(self, index, value):
         if value not in ArbitraryModes:
@@ -149,6 +161,7 @@ class siglentSDG2000X(siglentFgenBase):
         #    self._arb_store_names.remove(handle)
 
         # TODO: Siglent's current programming manual is not providing any way to remove a waveform by name!
+        pass
 
     def _arbitrary_waveform_create(self, data):
         arb_handles = self._get_user_arb_store_names()

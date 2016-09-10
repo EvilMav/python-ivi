@@ -39,7 +39,7 @@ from .. import fgen
 
 StandardWaveformMapping = {
     'sine': 'SINE',
-    'square': 'SQUARE',
+    'square': 'PULSE',
     'triangle': 'RAMP',
     'dc': 'DC'
     # Missing: ramp up, ramp down
@@ -184,7 +184,7 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.Arb
     @staticmethod
     def _strip_units(string_with_units):
         """ Removes non-numeric chracters to strip units from a numeric string """
-        return re.sub("[^a-zA-Z ]", '', string_with_units)
+        return re.sub("[a-zA-Z ]", '', string_with_units)
 
     @staticmethod
     def _prepend_command_with_channel(command, index):
@@ -337,6 +337,7 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.Arb
         self._output_standard_waveform_dc_offset = list()
         self._output_standard_waveform_start_phase = list()
         self._output_standard_waveform_frequency = list()
+        self._output_standard_waveform_duty_cycle_high = list()
 
         self._output_arbitrary_gain = list()
         self._output_arbitrary_frequency = list()
@@ -356,11 +357,12 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.Arb
             self._output_standard_waveform_dc_offset.append(0.0)
             self._output_standard_waveform_start_phase.append(0.0)
             self._output_standard_waveform_frequency.append(1000)
+            self._output_standard_waveform_duty_cycle_high.append(50)
 
             self._output_arbitrary_gain.append(2.0)
             self._output_arbitrary_frequency.append(1000)
             self._output_arbitrary_offset.append(0.0)
-            self._output_arbitrary_waveform.append('')
+            self._output_arbitrary_waveform.append(None)
             self._output_arbitrary_sample_rate.append(1000000)
             self._output_arbitrary_frequency_mode.append('frequency')
 
@@ -552,12 +554,14 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.Arb
         self._get_output_standard_waveform_waveform(index)
 
     def _restore_function_mode_parameters_from_cache(self, index):
-        self._set_output_standard_waveform_waveform(index, self._output_standard_waveform_waveform)
-        self._set_output_standard_waveform_amplitude(index, self._output_standard_waveform_amplitude)
-        self._set_output_standard_waveform_frequency(index, self._output_standard_waveform_frequency)
-        self._set_output_standard_waveform_dc_offset(index, self._output_standard_waveform_dc_offset)
-        self._set_output_standard_waveform_start_phase(index, self._output_standard_waveform_start_phase)
-        self._set_output_standard_waveform_duty_cycle_high(index, self._output_standard_waveform_duty_cycle)
+        index = ivi.get_index(self._output_name, index)
+
+        self._set_output_standard_waveform_waveform(index, self._output_standard_waveform_waveform[index])
+        self._set_output_standard_waveform_amplitude(index, self._output_standard_waveform_amplitude[index])
+        self._set_output_standard_waveform_frequency(index, self._output_standard_waveform_frequency[index])
+        self._set_output_standard_waveform_dc_offset(index, self._output_standard_waveform_dc_offset[index])
+        self._set_output_standard_waveform_start_phase(index, self._output_standard_waveform_start_phase[index])
+        self._set_output_standard_waveform_duty_cycle_high(index, self._output_standard_waveform_duty_cycle_high[index])
 
     def _get_output_standard_waveform_amplitude(self, index):
         if not self._is_in_function_mode(index):
@@ -673,15 +677,15 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.Arb
         self._get_output_arbitrary_frequency(index)
 
     def _restore_arbitrary_mode_parameters_from_cache(self, index):
-        self._set_output_arbitrary_gain(index, self._output_arbitrary_gain)
-        self._set_output_arbitrary_offset(index, self._output_arbitrary_offset)
-        self._set_output_arbitrary_waveform(index, self._output_arbitrary_waveform)
-
         index = ivi.get_index(self._output_name, index)
+
+        self._set_output_arbitrary_gain(index, self._output_arbitrary_gain[index])
+        self._set_output_arbitrary_offset(index, self._output_arbitrary_offset[index])
+
         if self._output_arbitrary_frequency_mode[index] == 'frequency':
-            self._set_output_arbitrary_frequency(index, self._output_arbitrary_frequency)
+            self._set_output_arbitrary_frequency(index, self._output_arbitrary_frequency[index])
         else:
-            self._set_output_arbitrary_sample_rate(index, self._output_arbitrary_sample_rate)
+            self._set_output_arbitrary_sample_rate(index, self._output_arbitrary_sample_rate[index])
 
     def _get_output_arbitrary_gain(self, index):
         if not self._is_in_arbitrary_mode(index):
@@ -711,13 +715,13 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.Arb
         else:
             self._set_output_common_waveform_dc_offset(index, value)
 
-    def _get_output_arbitrary_waveform_frequency(self, index):
+    def _get_output_arbitrary_frequency(self, index):
         if not self._is_in_arbitrary_mode(index):
             index = ivi.get_index(self._output_name, index)
             return self._output_arbitrary_waveform_frequency[index]
         return self._get_output_common_waveform_frequency(index)
 
-    def _set_output_arbitrary_waveform_frequency(self, channel, value):
+    def _set_output_arbitrary_frequency(self, channel, value):
         index = ivi.get_index(self._output_name, channel)
 
         if not self._is_in_arbitrary_mode(index):
