@@ -173,9 +173,12 @@ class siglentSDG2000X(siglentFgenBase):
             if new_handle not in arb_handles:
                 break
 
-        length, data_encoded = super(siglentSDG2000X)._convert_waveform_data(data)
+        length, data_encoded = super(siglentSDG2000X, siglentSDG2000X)._convert_waveform_data(data)
+        data_encoded = bytes(data_encoded) # to binary string rather then list
+
         # C1: or C2: doesn't seem to matter for the common memory, but needs to be there for the command to be accepted
-        self._write_raw('C1:WVDT WVNM,{0},LENGTH,{1},WAVEDATA,{2:b}\n'.format(new_handle, length, data_encoded))
+        cmd = bytes('C1:WVDT WVNM,{0},LENGTH,{1},WAVEDATA,'.format(new_handle, length), 'utf-8') + data_encoded + b'\n'
+        self._write_raw(cmd)
         self._arb_store_names.append(new_handle)
 
         return new_handle
@@ -188,7 +191,8 @@ class siglentSDG2000X(siglentFgenBase):
     @abstractmethod
     def _get_output_arbitrary_waveform(self, index):
         return self._get_scpi_option_cached('ARWV', option='NAME',
-                                            channel=index)
+                                            channel=index,
+                                            cast_cache=lambda s: s[:-4] if s[-4:] == '.bin' else s)  # strip extension
 
     @abstractmethod
     def _set_output_arbitrary_waveform(self, index, value):
@@ -196,5 +200,21 @@ class siglentSDG2000X(siglentFgenBase):
             raise ivi.InvalidOptionValueException()
 
         self._set_scpi_option_cached(value, 'ARWV', option='NAME', channel=index)
+
+    # endregion
+
+
+    # region Burst TrueArb guard
+
+    def _get_output_operation_mode(self, index):
+        index = ivi.get_index(self._output_name, index)
+        return self._output_operation_mode[index]
+
+    def _set_output_operation_mode(self, index, value):
+        index = ivi.get_index(self._output_name, index)
+        if value not in fgen.OperationMode:
+            raise ivi.ValueNotSupportedException()
+
+        self._output_operation_mode[index] = value
 
     # endregion

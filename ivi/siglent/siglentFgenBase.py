@@ -177,7 +177,7 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.Arb
     @staticmethod
     def _convert_waveform_data(data):
         def convert_sample(sample):
-            return round(sample * 32767.5 - 0.5).to_bytes(2, order='little')
+            return round(sample * 32767.5 - 0.5).to_bytes(2, 'little', signed=True)
         bytes_iter = itertools.chain.from_iterable(map(convert_sample, data))
         return len(data)*2, list(bytes_iter)
 
