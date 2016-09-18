@@ -151,6 +151,7 @@ class siglentSDG2000X(siglentFgenBase):
         self._set_cache_valid(valid=False, tag='_output_arbitrary_waveform_frequency', index=index)
         self._set_cache_valid(valid=False, tag='_output_arbitrary_sample_rate', index=index)
         self._set_cache_valid(valid=False, tag='_arbitrary_sample_rate', index=index)
+        self._set_cache_valid(valid=False, tag='_output_operation_mode', index=index)
 
     # endregion
 
@@ -169,12 +170,12 @@ class siglentSDG2000X(siglentFgenBase):
         # find a free handle
         new_handle = ''
         for i in itertools.count():
-            new_handle = 'pivi'+str(i)
+            new_handle = 'pivi' + str(i)
             if new_handle not in arb_handles:
                 break
 
         length, data_encoded = super(siglentSDG2000X, siglentSDG2000X)._convert_waveform_data(data)
-        data_encoded = bytes(data_encoded) # to binary string rather then list
+        data_encoded = bytes(data_encoded)  # to binary string rather then list
 
         # C1: or C2: doesn't seem to matter for the common memory, but needs to be there for the command to be accepted
         cmd = bytes('C1:WVDT WVNM,{0},LENGTH,{1},WAVEDATA,'.format(new_handle, length), 'utf-8') + data_encoded + b'\n'
@@ -203,18 +204,19 @@ class siglentSDG2000X(siglentFgenBase):
 
     # endregion
 
-
     # region Burst TrueArb guard
 
-    def _get_output_operation_mode(self, index):
-        index = ivi.get_index(self._output_name, index)
-        return self._output_operation_mode[index]
-
-    def _set_output_operation_mode(self, index, value):
+    def _set_output_operation_mode(self, index, value):  # Burst not supported in TrueArb mode: switch if neccessary
         index = ivi.get_index(self._output_name, index)
         if value not in fgen.OperationMode:
             raise ivi.ValueNotSupportedException()
 
-        self._output_operation_mode[index] = value
+        if value == 'burst' and \
+                    self._get_output_mode(index) == 'arbitrary' and \
+                    self._get_output_arbitrary_arb_mode(index) == 'TrueArb':
+            warn('Burst not supported in TrueArb mode: switching to DDS')
+            self._set_output_arbitrary_arb_mode(index, 'DDS')
+
+        super(siglentSDG2000X, siglentSDG2000X)._set_output_operation_mode(index, value)
 
     # endregion

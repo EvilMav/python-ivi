@@ -35,7 +35,7 @@ import itertools
 from numpy import *
 
 from .. import ivi
-from .. import fgen
+from .. import fgen, counter
 
 StandardWaveformMapping = {
     'sine': 'SINE',
@@ -46,9 +46,9 @@ StandardWaveformMapping = {
 }
 
 
-# TODO: f-counter, AM/FM and other modulations, harmonics, sync modes, waveform combining, inversion
+# TODO: Implement frequency counter, AM/FM modulation
 class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.ArbFrequency,
-                      fgen.SoftwareTrigger, fgen.Burst,
+                      fgen.InternalTrigger, fgen.Trigger, fgen.Burst, fgen.SoftwareTrigger,
                       fgen.ArbChannelWfm):
     """ Siglent function/arbitrary waveform generator driver """
 
@@ -72,15 +72,6 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.Arb
         self._supports_cmr_query = False  # Not currently supported on SDG2000X and SDG1000X
 
         self._init_outputs()
-
-        # TODO: DEBUG only
-        def dbg_ask(str, f):
-            print(str)
-            res = f(str)
-            print(res)
-            return res
-        old_ask = self._ask
-        self._ask = lambda str: dbg_ask(str, old_ask)
 
     def _initialize(self, resource=None, id_query=False, reset=False, **keywargs):
         """ Opens an I/O session to the instrument."""
@@ -110,7 +101,7 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.Arb
             self._identity_instrument_firmware_revision = "Not available while simulating"
         else:
             lst = self._ask("*IDN?").split(",")
-            self._identity_instrument_manufacturer = lst[0]   # TODO: load from device
+            self._identity_instrument_manufacturer = lst[0]
             self._identity_instrument_model = lst[1]
             self._identity_instrument_firmware_revision = lst[3]
             self._set_cache_valid(True, 'identity_instrument_manufacturer')
@@ -366,16 +357,18 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.Arb
             self._output_arbitrary_sample_rate.append(1000000)
             self._output_arbitrary_frequency_mode.append('frequency')
 
-    def _get_output_operation_mode(self, index):
-        index = ivi.get_index(self._output_name, index)
-        return self._output_operation_mode[index]
+            self._output_trigger_source[i] = 'internal'
 
-    def _set_output_operation_mode(self, index, value):
-        index = ivi.get_index(self._output_name, index)
+    def _get_output_operation_mode(self, index):
+        return self._get_scpi_option_cached('BTWF', 'STATE',
+                                            channel=index,
+                                            cast_cache=lambda s: 'burst' if s == 'ON' else 'continous')
+
+    def _set_output_operation_mode(self, index, value):  # Burst mode currently not implemented
         if value not in fgen.OperationMode:
             raise ivi.ValueNotSupportedException()
 
-        self._output_operation_mode[index] = value
+        self._update_burst_config(index)
 
     def _get_output_enabled(self, index):
         return self._get_scpi_option_cached('OUTP',
@@ -760,15 +753,47 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.Arb
     def _arbitrary_clear_memory(self):
         pass
 
+    def _arbitrary_waveform_create_channel_waveform(self, index, data):
+        handle = self._arbitrary_waveform_create(data)
+        self._set_output_arbitrary_waveform(index, handle)
+        return handle
+
 # endregion
 
 # region Trigger and Burst
 
-    def send_software_trigger(self):
-        if not self._driver_operation_simulate:
-            self._write("*TRG")
+    def _update_burst_config(self, index):
+        index = ivi.get_index(self._output_name, index)
+        if self._get_output_operation_mode(index) == 'continous':
+            cmd = self._prepend_command_with_channel('BTWV STATE, OFF', index)
+            self._write(cmd)
+        elif self._get_output_operation_mode(index) == 'burst':
+            trigger_cmd = ''
+            if self._output_trigger_source[index] == 'external':
+                trigger_cmd = 'TRSR, EXT'
+            elif self._output_trigger_source[index] == 'internal':
+                trigger_cmd = 'TRSR, INT, PRD, {}S'.format(1.0 / self._internal_trigger_rate)
+            elif self._output_trigger_source[index] == 'software':
+                trigger_cmd = 'TRSR, MAN'
 
-    def _get_output_burst_count(self, index):
+            cmd = 'BTWV STATE, ON, GATE_NCYC, NCYC, TIME, {}, {}'.format(self._output_burst_count[index], trigger_cmd)
+            cmd = self._prepend_command_with_channel(cmd, index)
+            self._write(cmd)
+        else:
+            raise ivi.ValueNotSupportedException()
+
+    def _get_internal_trigger_rate(self):
+        return self._internal_trigger_rate
+
+    def _set_internal_trigger_rate(self, value):
+        value = float(value)
+        self._internal_trigger_rate = value
+
+        # Internal trigger is currently used in the burst mode only - ensure burst configs are updated
+        self._update_burst_config(0)
+        self._update_burst_config(1)
+
+    def _get_output_burst_count(self, index): # TODO
         index = ivi.get_index(self._output_name, index)
         return self._output_burst_count[index]
 
@@ -776,10 +801,22 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.Arb
         index = ivi.get_index(self._output_name, index)
         value = int(value)
         self._output_burst_count[index] = value
+        self._update_burst_config(index)
 
-    def _arbitrary_waveform_create_channel_waveform(self, index, data):
-        handle = self._arbitrary_waveform_create(data)
-        self._set_output_arbitrary_waveform(index, handle)
-        return handle
+    def _get_output_trigger_source(self, index):
+        index = ivi.get_index(self._output_name, index)
+        return self._output_trigger_source[index]
+
+    def _set_output_trigger_source(self, index, value):
+        if value not in ['internal', 'external', 'software']:
+            raise ivi.ValueNotSupportedException()
+        index = ivi.get_index(self._output_name, index)
+        self._output_trigger_source[index] = value
+        self._update_burst_config(index)
+
+    def _send_software_trigger(self):
+        for i in range(self._output_count):
+            if self._get_output_operation_mode(i) == 'burst' and self._get_output_trigger_source(i) == 'software':
+                self._write(self._prepend_command_with_channel('BTWV MTRIG', i))  # TODO: Value for mtrig?
 
 # endregion
