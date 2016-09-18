@@ -217,6 +217,6 @@ class siglentSDG2000X(siglentFgenBase):
             warn('Burst not supported in TrueArb mode: switching to DDS')
             self._set_output_arbitrary_arb_mode(index, 'DDS')
 
-        super(siglentSDG2000X, siglentSDG2000X)._set_output_operation_mode(index, value)
+        super(siglentSDG2000X, self)._set_output_operation_mode(index, value)
 
     # endregion

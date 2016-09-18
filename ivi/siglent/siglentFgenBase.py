@@ -35,7 +35,7 @@ import itertools
 from numpy import *
 
 from .. import ivi
-from .. import fgen, counter
+from .. import fgen
 
 StandardWaveformMapping = {
     'sine': 'SINE',
@@ -360,14 +360,15 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.Arb
             self._output_trigger_source[i] = 'internal'
 
     def _get_output_operation_mode(self, index):
-        return self._get_scpi_option_cached('BTWF', 'STATE',
-                                            channel=index,
-                                            cast_cache=lambda s: 'burst' if s == 'ON' else 'continous')
+        index = ivi.get_index(self._output_name, index)
+        return self._output_operation_mode[index]
 
     def _set_output_operation_mode(self, index, value):  # Burst mode currently not implemented
         if value not in fgen.OperationMode:
             raise ivi.ValueNotSupportedException()
 
+        index = ivi.get_index(self._output_name, index)
+        self._output_operation_mode[index] = value
         self._update_burst_config(index)
 
     def _get_output_enabled(self, index):
@@ -764,21 +765,28 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.Arb
 
     def _update_burst_config(self, index):
         index = ivi.get_index(self._output_name, index)
-        if self._get_output_operation_mode(index) == 'continous':
+        if self._output_operation_mode[index] in ['continuous', '']:
             cmd = self._prepend_command_with_channel('BTWV STATE, OFF', index)
             self._write(cmd)
-        elif self._get_output_operation_mode(index) == 'burst':
-            trigger_cmd = ''
-            if self._output_trigger_source[index] == 'external':
-                trigger_cmd = 'TRSR, EXT'
-            elif self._output_trigger_source[index] == 'internal':
-                trigger_cmd = 'TRSR, INT, PRD, {}S'.format(1.0 / self._internal_trigger_rate)
-            elif self._output_trigger_source[index] == 'software':
-                trigger_cmd = 'TRSR, MAN'
+        elif self._output_operation_mode[index] == 'burst':
 
-            cmd = 'BTWV STATE, ON, GATE_NCYC, NCYC, TIME, {}, {}'.format(self._output_burst_count[index], trigger_cmd)
+            cmd = 'BTWV STATE, ON, GATE_NCYC, NCYC, TIME, {}'.format(self._output_burst_count[index])
             cmd = self._prepend_command_with_channel(cmd, index)
             self._write(cmd)
+
+            # Trigger change is not accepted in the same command for some reason: issue multiple commands
+            trigger_cmds = ''
+            if self._output_trigger_source[index] == 'external':
+                trigger_cmds = ['BTWV TRSR,EXT']
+            elif self._output_trigger_source[index] == 'internal':
+                trigger_cmds = ['BTWV TRSR,INT', 'BTWV PRD,{}S'
+                                .format(1.0 if self._internal_trigger_rate == 0 else 1.0 / self._internal_trigger_rate)]
+            elif self._output_trigger_source[index] == 'software':
+                trigger_cmds = ['BTWV TRSR,MAN']
+
+            for trigger_cmd in trigger_cmds:
+                cmd = self._prepend_command_with_channel(trigger_cmd, index)
+                self._write(cmd)
         else:
             raise ivi.ValueNotSupportedException()
 
@@ -793,7 +801,7 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.Arb
         self._update_burst_config(0)
         self._update_burst_config(1)
 
-    def _get_output_burst_count(self, index): # TODO
+    def _get_output_burst_count(self, index):
         index = ivi.get_index(self._output_name, index)
         return self._output_burst_count[index]
 
@@ -817,6 +825,6 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm, fgen.Arb
     def _send_software_trigger(self):
         for i in range(self._output_count):
             if self._get_output_operation_mode(i) == 'burst' and self._get_output_trigger_source(i) == 'software':
-                self._write(self._prepend_command_with_channel('BTWV MTRIG', i))  # TODO: Value for mtrig?
+                self._write(self._prepend_command_with_channel('BTWV MTRIG', i))
 
 # endregion
