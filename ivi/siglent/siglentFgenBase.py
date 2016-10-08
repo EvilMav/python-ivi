@@ -366,10 +366,7 @@ class siglentFgenBase(ivi.Driver, fgen.Base, fgen.StdFunc, fgen.ArbWfm,
     # region Output settings
 
     def _init_outputs(self):
-        try:
-            super(siglentFgenBase, self)._init_outputs()
-        except AttributeError:
-            pass
+        super(siglentFgenBase, self)._init_outputs()
 
         # initialize channel-indexed lists: values will be updated by the
         # getters on demand

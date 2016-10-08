@@ -72,10 +72,7 @@ class siglentSDG2000X(siglentFgenBase):
         self._init_outputs()
 
     def _init_outputs(self):
-        try:
-            super(siglentSDG2000X, self)._init_outputs()
-        except AttributeError:
-            pass
+        super(siglentSDG2000X, self)._init_outputs()
 
         self._output_arbitrary_arb_mode = list()
         self._output_arbitrary_sample_rate = list()
